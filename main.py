@@ -1,6 +1,20 @@
-def updatedb():
-  api_key = creds.NASA_API_KEY
+# Imports
+import pymongo
+from pymongo import MongoClient
+import requests
+import pandas as pd
+from datetime import datetime, timedelta
+import time
+import os
 
+# Your NASA API key
+api_key = os.environ['NASA_API_KEY']
+
+my_secret = os.environ['MONGO_URI']
+
+
+def fetch_apod(api_key):
+  # Get today's date
   today = datetime.today().strftime("%Y-%m-%d")
 
   # Define the endpoint URL for the APOD API
@@ -9,13 +23,26 @@ def updatedb():
   # Make a GET request to the APOD API
   response = requests.get(apod_url)
 
+  # Initialize an empty dictionary to store APOD data
   apod_data = {}
 
+  # Check if the request was successful (status code 200)
   if response.status_code == 200:
+    # Parse the JSON data
     apod_data = response.json()
   else:
     print("Failed to retrieve data from the APOD API.")
-    return
+
+  return apod_data
+
+
+def update_database(apod_data):
+  # Connect to MongoDB
+  client = MongoClient(my_secret)
+  db = client[
+      'astronomy']  # Replace 'your_database_name' with your database name
+  collection = db[
+      'apod']  # Replace 'your_collection_name' with your collection name
 
   # Extract relevant information
   title = apod_data.get('title', '')
@@ -23,14 +50,12 @@ def updatedb():
   explanation = apod_data.get('explanation', '')
   image_url = apod_data.get('url', '')
 
-  # Connect to MongoDB
-  client = MongoClient(creds.MONGO_URI)
-  db = client["astronomy"]
-  collection = db["apod"]
+  # Check if the image already exists in the database
+  existing_image = collection.find_one({'Date': date})
 
-  # Check if the record for today already exists in the database
-  if collection.find_one({"Date": date}):
-    print("Record for today already exists in the database.")
+  if existing_image:
+    print("Image already exists in the database.")
+    return
 
   # Create a pandas DataFrame with the data for today's image
   df = pd.DataFrame({
@@ -43,21 +68,25 @@ def updatedb():
   # Convert DataFrame to dictionary
   data_dict = df.to_dict(orient='records')
 
-  # Insert the record into the MongoDB collection
+  # Insert data into MongoDB collection
   collection.insert_many(data_dict)
 
+  # Confirm insertion
   print("Data inserted successfully into MongoDB.")
 
 
-def schedule_daily_update():
-  schedule.every().day.at("23:00").do(updatedb)
-
-  # Keep the program running to allow the scheduler to continue executing
+def main():
   while True:
-    schedule.run_pending()
-    time.sleep(1)
+    try:
+      apod_data = fetch_apod(api_key)
+      update_database(apod_data)
+      # Wait for an hour before checking again
+      time.sleep(3600)
+    except Exception as e:
+      print(f"An error occurred: {e}")
+      # Wait for 5 minutes before retrying
+      time.sleep(300)
 
 
-# Start the scheduler in a separate thread
-scheduler_thread = threading.Thread(target=schedule_daily_update)
-scheduler_thread.start()
+if __name__ == "__main__":
+  main()
